@@ -339,6 +339,30 @@ main{padding-top:28px;}
   margin:0;
   font-size:1.5rem;
   line-height:1.3;
+  flex:1 1 auto;
+}
+.read-btn{
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:7px 14px;
+  border-radius:999px;
+  border:1px solid color-mix(in srgb, var(--accent-ink) 45%, transparent);
+  background:color-mix(in srgb, var(--accent-ink) 14%, transparent);
+  color:var(--accent-ink);
+  font-size:.82rem;
+  font-family:"Noto Sans KR", sans-serif;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.read-btn:hover{background:color-mix(in srgb, var(--accent-ink) 24%, transparent);}
+.read-btn:focus-visible{outline:2px solid var(--accent-ink); outline-offset:2px;}
+.read-btn svg{width:14px;height:14px;flex:0 0 auto;}
+.read-btn.speaking{background:color-mix(in srgb, var(--accent-ink) 30%, transparent);}
+@media (prefers-reduced-motion:no-preference){
+  .read-btn.speaking svg{animation:pulse 1s ease-in-out infinite;}
+  @keyframes pulse{ 50%{opacity:.45;} }
 }
 .card-meta{
   padding:10px 28px 0;
@@ -653,10 +677,17 @@ function renderGallery(images){
 }
 
 function render(index){
+  stopReading();
   current = index;
   const it = DATA[index];
   els.card.innerHTML = `
-    <div class="card-title"><span class="num">${escapeHtml(it.num)}.</span><h2>${escapeHtml(it.title)}</h2></div>
+    <div class="card-title">
+      <span class="num">${escapeHtml(it.num)}.</span><h2>${escapeHtml(it.title)}</h2>
+      <button type="button" class="read-btn" id="readBtn" aria-pressed="false" aria-label="이 항목 읽어주기">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 8.5a5 5 0 0 1 0 7"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
+        <span id="readBtnLabel">읽어주기</span>
+      </button>
+    </div>
     ${it.meta ? `<div class="card-meta">${escapeHtml(it.meta)}</div>` : ''}
     ${renderGallery(it.images)}
     <div class="prose">${renderSections(it.sections)}</div>
@@ -668,6 +699,66 @@ function render(index){
   els.card.scrollIntoView({block:'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
   closeDrawer();
 }
+
+// 읽어주기 (Web Speech API)
+let koVoice = null;
+function pickVoice(){
+  if(!('speechSynthesis' in window)) return;
+  const voices = speechSynthesis.getVoices();
+  koVoice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('ko')) || null;
+}
+if('speechSynthesis' in window){
+  pickVoice();
+  speechSynthesis.onvoiceschanged = pickVoice;
+}
+
+function buildReadText(it){
+  const parts = [`${it.num}번, ${it.title}.`];
+  if(it.meta) parts.push(it.meta + '.');
+  for(const s of it.sections){
+    parts.push(s.type === 'h' ? (s.text + '.') : s.text);
+  }
+  return parts.join(' ');
+}
+
+function updateReadBtn(speaking){
+  const btn = document.getElementById('readBtn');
+  const label = document.getElementById('readBtnLabel');
+  if(!btn || !label) return;
+  btn.classList.toggle('speaking', speaking);
+  btn.setAttribute('aria-pressed', String(speaking));
+  label.textContent = speaking ? '정지' : '읽어주기';
+}
+
+function stopReading(){
+  if('speechSynthesis' in window) speechSynthesis.cancel();
+  updateReadBtn(false);
+}
+
+function toggleReading(){
+  if(!('speechSynthesis' in window)){
+    alert('이 브라우저에서는 읽어주기 기능을 지원하지 않습니다.');
+    return;
+  }
+  if(speechSynthesis.speaking || speechSynthesis.pending){
+    stopReading();
+    return;
+  }
+  const it = DATA[current];
+  const utter = new SpeechSynthesisUtterance(buildReadText(it));
+  utter.lang = 'ko-KR';
+  if(koVoice) utter.voice = koVoice;
+  utter.rate = 0.98;
+  utter.onend = () => updateReadBtn(false);
+  utter.onerror = () => updateReadBtn(false);
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utter);
+  updateReadBtn(true);
+}
+
+els.card.addEventListener('click', e => {
+  if(e.target.closest('#readBtn')) toggleReading();
+});
 
 function snippetFor(text, query){
   const idx = text.toLowerCase().indexOf(query);
