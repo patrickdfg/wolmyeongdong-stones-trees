@@ -741,6 +741,33 @@ function buildReadText(it){
   return parts.join(' ');
 }
 
+// 모바일 크롬 등에서 발화가 15초 안팎으로 끊기는 고질적 버그가 있어
+// 긴 글을 문장 단위로 잘라 순서대로 이어 읽는다.
+function chunkText(text, maxLen){
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const chunks = [];
+  let cur = '';
+  function flush(){ if(cur.trim()){ chunks.push(cur.trim()); cur = ''; } }
+  for(let s of sentences){
+    // 문장 하나가 이미 너무 길면 공백 기준으로 강제로 더 잘게 나눈다
+    while(s.length > maxLen){
+      let cut = s.lastIndexOf(' ', maxLen);
+      if(cut < maxLen * 0.5) cut = maxLen;
+      flush();
+      chunks.push(s.slice(0, cut).trim());
+      s = s.slice(cut).trim();
+    }
+    if(cur && (cur.length + s.length + 1) > maxLen){
+      flush();
+      cur = s;
+    } else {
+      cur = cur ? cur + ' ' + s : s;
+    }
+  }
+  flush();
+  return chunks;
+}
+
 function updateReadBtn(speaking){
   const btn = document.getElementById('readBtn');
   const label = document.getElementById('readBtnLabel');
@@ -750,9 +777,34 @@ function updateReadBtn(speaking){
   label.textContent = speaking ? '정지' : '읽어주기';
 }
 
+let readQueue = [];
+let readQueueIndex = 0;
+let readKeepAlive = null;
+
+function clearReadKeepAlive(){
+  if(readKeepAlive){ clearInterval(readKeepAlive); readKeepAlive = null; }
+}
+
 function stopReading(){
+  clearReadKeepAlive();
+  readQueue = [];
+  readQueueIndex = 0;
   if('speechSynthesis' in window) speechSynthesis.cancel();
   updateReadBtn(false);
+}
+
+function speakNextChunk(){
+  if(readQueueIndex >= readQueue.length){
+    stopReading();
+    return;
+  }
+  const utter = new SpeechSynthesisUtterance(readQueue[readQueueIndex]);
+  utter.lang = 'ko-KR';
+  if(koVoice) utter.voice = koVoice;
+  utter.rate = 0.98;
+  utter.onend = () => { readQueueIndex++; speakNextChunk(); };
+  utter.onerror = () => stopReading();
+  speechSynthesis.speak(utter);
 }
 
 function toggleReading(){
@@ -760,20 +812,24 @@ function toggleReading(){
     alert('이 브라우저에서는 읽어주기 기능을 지원하지 않습니다.');
     return;
   }
-  if(speechSynthesis.speaking || speechSynthesis.pending){
+  if(readQueue.length || speechSynthesis.speaking || speechSynthesis.pending){
     stopReading();
     return;
   }
   const it = DATA[current];
-  const utter = new SpeechSynthesisUtterance(buildReadText(it));
-  utter.lang = 'ko-KR';
-  if(koVoice) utter.voice = koVoice;
-  utter.rate = 0.98;
-  utter.onend = () => updateReadBtn(false);
-  utter.onerror = () => updateReadBtn(false);
+  readQueue = chunkText(buildReadText(it), 120);
+  readQueueIndex = 0;
   speechSynthesis.cancel();
-  speechSynthesis.speak(utter);
   updateReadBtn(true);
+  // 안드로이드 크롬의 긴 발화 자동 정지 버그 완화용 keep-alive
+  clearReadKeepAlive();
+  readKeepAlive = setInterval(() => {
+    if(speechSynthesis.speaking){
+      speechSynthesis.pause();
+      speechSynthesis.resume();
+    }
+  }, 8000);
+  speakNextChunk();
 }
 
 els.card.addEventListener('click', e => {
